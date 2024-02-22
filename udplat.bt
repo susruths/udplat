@@ -1,0 +1,119 @@
+#!/usr/bin/env bpftrace
+/*
+ * udplat - Packet processing latency for UDP packets from sys enter to dev xmit.
+ * 21-Feb-2024  Susruth Sudhakaran   Created this.
+ *
+ *	A typical udp program uses sendto (eventually) to send datagrams
+ *  The following is path followed by the packet from then on - UDP ip_layer,
+ *   IP Layer and then to the net device.
+ *	This program will track the latency at each layer upto net device 
+ *
+ *	sock_sendmsg
+ *	inet_sendmsg
+ *	udp_sendmsg
+ *	ip_send_skb
+ *	dev_queue_xmit //Queued
+ *	probe__dev_hard_start_xmit //Sent to device
+ *	.
+ *	.
+ *	.
+ *	probe__ip_send_skb__return
+ *	probe__udp_sendmsg_exit__return
+ *	probe__inet_sendmsg_exit__return
+ *	probe__sock_sendmsg_exit__return
+ *
+ *	Prereq: bpftrace (ubuntu: sudo apt install bpftrace)
+ *  usage: sudo udplat.bt
+ *  
+*/
+
+#include <net/sock.h>
+#include <linux/socket.h>
+
+BEGIN
+{
+	printf("Press Control-C to quit\n");
+	printf("%-5s %-10s ", "PID", "COMM");
+	printf("%6s %6s %s\n", "Copy_MS", "UDP_MS", "TOT_MS");
+}
+
+
+/*
+ * Life for UDP packet starts here after an user app calls sendto on a socket 
+ */
+tracepoint:syscalls:sys_enter_sendmsg,
+tracepoint:syscalls:sys_enter_sendto
+{
+    @sendto[tid] = nsecs;
+}
+
+
+/*
+ * Message is copied to kernel space before sock_sendmsg is called
+ * So we need to get that delay as well. 
+ *  sock_sendmsg(struct socket *sock, struct msghdr *msg)
+ */
+kprobe:sock_sendmsg
+{
+	$delay = nsecs - @sendto[tid];
+	@msg_start[tid] = nsecs;
+	@birth[tid] = nsecs;
+	delete(@sendto[tid]);
+}
+
+kretprobe:sock_sendmsg
+{
+	delete(@msg_start[tid]);
+	delete(@birth[tid]);
+}
+
+/*
+ * struct udp_sock does not have byte metrics, so we must trace send/recv.
+ * This costs overhead.
+ * int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
+ *
+ */
+kprobe:udp_sendmsg
+/@msg_start[tid]/
+{
+	$msg = (struct msghdr *)arg1;
+	@msghdr[tid] = $msg;
+	@udp_start[tid] = nsecs;
+}
+
+kretprobe:udp_sendmsg
+{
+	delete(@msghdr[tid]);
+	delete(@udp_start[tid]);
+}
+
+/*
+*	int ip_send_skb(struct net *net, struct sk_buff *skb)
+*/
+kprobe:ip_send_skb
+/@udp_start[tid]/
+{
+	@ip_start[tid] = nsecs;
+	/*@skpid[$skb] = pid;
+    @skcomm[$skb] = comm;*/
+}
+
+kretprobe:ip_send_skb
+/@msghdr[tid]/
+{
+	$now = nsecs;
+	$copy_ms = @udp_start[tid] - @birth[tid];
+	$delta_ms = $now - @birth[tid];
+	$tx_ms = $now - @udp_start[tid];
+
+	printf("%-5d %-10.10s ", pid, comm );
+	printf("%6d %6d %d\n", $copy_ms, $udp_ms, $delta_ms);
+    delete(@ip_start[tid]);	
+}
+
+
+END
+{
+	clear(@birth); 
+	clear(@msg_start); clear(@ip_start); clear(@udp_start);
+}
