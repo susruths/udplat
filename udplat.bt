@@ -68,8 +68,8 @@ kretprobe:sock_sendmsg
 }
 
 /*
- * struct udp_sock does not have byte metrics, so we must trace send/recv.
- * This costs overhead.
+ * Entry point to the transport layer.
+ * 
  * int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
  *
  */
@@ -88,6 +88,7 @@ kretprobe:udp_sendmsg
 }
 
 /*
+*	Entry point to ip layer
 *	int ip_send_skb(struct net *net, struct sk_buff *skb)
 */
 kprobe:ip_send_skb
