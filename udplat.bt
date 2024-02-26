@@ -105,7 +105,7 @@ kretprobe:ip_send_skb
 	$now = nsecs;
 	$copy_ms = @udp_start[tid] - @birth[tid];
 	$delta_ms = $now - @birth[tid];
-	$tx_ms = $now - @udp_start[tid];
+	$udp_ms = $now - @udp_start[tid];
 
 	printf("%-5d %-10.10s ", pid, comm );
 	printf("%6d %6d %d\n", $copy_ms, $udp_ms, $delta_ms);
